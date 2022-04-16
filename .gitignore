@@ -1,2 +1,3 @@
 data/word_embeddings.npy
 data/word_idx.dict
+.idea/
