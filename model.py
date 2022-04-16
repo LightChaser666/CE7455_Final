@@ -33,7 +33,6 @@ class NetAB(nn.Module):
         self.transition2 = TransitionLayer(d_hid)
 
     def forward(self, x):
-
         x = self.embedding(x)
         x = self.dropout1(x)
         x = x.unsqueeze(1)
@@ -46,6 +45,13 @@ class NetAB(nn.Module):
         sen_logits = clean_logits.unsqueeze(1)
         noisy_logits = sen_logits.matmul(prob).squeeze(1)
         return noisy_logits, clean_logits
+
+    def pre_run(self, x):
+        x = self.embedding(x)
+        x = self.dropout1(x)
+        x = x.unsqueeze(1)
+        output1 = self.cnn(x)
+        return self.clean_linear(output1)
 
 
 class ConvModule(nn.Module):
@@ -72,7 +78,6 @@ class ConvModule(nn.Module):
 
     def forward(self, x):        
         return torch.cat( (self.cnn1(x), self.cnn2(x), self.cnn3(x)) , dim=1).squeeze()
-
 
 
 class TransitionLayer(nn.Module):
