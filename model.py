@@ -28,7 +28,9 @@ class NetAB(nn.Module):
         self.dropout2 = nn.Dropout(dropout2)
         d_hid = self.filter_num * 3
         self.clean_linear = nn.Linear(d_hid, 2)
-
+        # Initialize with magic number
+        nn.init.uniform_(self.clean_linear.weight,-0.01,0.01)
+        nn.init.uniform_(self.clean_linear.bias,-0.01,0.01)
         self.transition1 = TransitionLayer(d_hid)
         self.transition2 = TransitionLayer(d_hid)
 
@@ -52,6 +54,12 @@ class NetAB(nn.Module):
         x = x.unsqueeze(1)
         output1 = self.cnn(x)
         return self.clean_linear(output1)
+
+    def get_pre_l2(self):
+        return torch.norm(self.clean_linear.weight) + torch.norm(self.clean_linear.bias)
+
+    def get_l2(self):
+        return self.get_pre_l2() + self.transition1.get_l2() + self.transition2.get_l2()
 
 
 class ConvModule(nn.Module):
@@ -84,15 +92,21 @@ class TransitionLayer(nn.Module):
     def __init__(self, hidden_dim):
         super(TransitionLayer, self).__init__()
         self.attn = nn.Linear(hidden_dim, hidden_dim)
+        nn.init.uniform_(self.attn.weight,-0.01,0.01)
+        nn.init.uniform_(self.attn.bias,0,0)
         self.tanh = nn.Tanh()
         self.u = nn.Linear(hidden_dim, 2,bias=False)
+        nn.init.uniform_(self.u.weight,-0.01,0.01)
 
     def forward(self, x):
         z = self.tanh(self.attn(x))
         logit = self.u(z)
         e_logit = torch.exp(logit)
         e_sum = torch.sum(e_logit, dim=1, keepdim=True) + 1e-9
-        return logit / e_sum
+        return e_logit / e_sum
+
+    def get_l2(self):
+        return torch.norm(self.attn.weight)+torch.norm(self.attn.bias) + torch.norm(self.u.weight)
 
 
 # model computation test
