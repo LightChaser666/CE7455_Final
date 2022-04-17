@@ -12,6 +12,8 @@ from tqdm import tqdm
 from dataset import DomainData
 from model import NetAB
 
+import numpy as np
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='NetAB for noisy label semantic classification')
@@ -47,6 +49,37 @@ def parse_args():
     return parser.parse_args()
 
 
+
+def test(model, loader):
+    model.eval()
+    loop = tqdm(loader)
+    loop.set_description('Epoch %d' % epoch)
+    
+    total_loss = 0
+    total_acc = 0
+    total_num = 0
+
+    for idx, x, y in loop:
+        x = torch.stack(x,dim=1).to(device)
+        y = y.to(device)
+
+        total_num = total_num + y.shape[0]
+
+        pred = model.pre_run(x)
+        loss = ce(pred, y.to(device))
+        
+        total_loss = total_loss + torch.sum(loss).cpu()
+
+        y_pred = torch.argmax(pred, axis=1)
+        indices_true = torch.arange(0, len(y)).to(device)
+        indices_true = indices_true[y_pred == y]
+        acc_num = len(indices_true)
+        total_acc = total_acc + acc_num
+
+    print('[INFO] loss: {},  acc: {}'.format(total_loss / total_num, total_acc / total_num))
+    
+    return total_acc / total_num
+
 if __name__ == '__main__':
     args = parse_args()
     domain = args.dataset
@@ -55,20 +88,23 @@ if __name__ == '__main__':
     model = NetAB(domain).to(device)
     # Dataset Preparation
     train_set = DomainData(domain, 'train')
-    train_loader = DataLoader(train_set, batch_size=args.batch_size)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     test_set = DomainData(domain, 'test')
-    test_loader = DataLoader(test_set)
+    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
     val_set = DomainData(domain, 'val')
-    val_loader = DataLoader(val_set)
+    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
+
     adam = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_reg)
+    #adam = torch.optim.Adam(model.parameters(), lr=args.lr)
     clip = args.max_grad_norm
     step_lr = torch.optim.lr_scheduler.StepLR(adam, args.decay_steps, args.decay_rate)
     ce = torch.nn.CrossEntropyLoss()
-    model.train()
     for epoch in range(1, epochs + 1):
+        model.train()
         total_loss = []
         total_acc_num = []
         total_num = []
+
         loop = tqdm(train_loader)
         loop.set_description('Epoch %d' % epoch)
         if epoch <= 5:
@@ -78,18 +114,96 @@ if __name__ == '__main__':
                 pred = model.pre_run(x)
                 loss = ce(pred, y.to(device))
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+
                 adam.step()
-                step_lr.step(epoch)
+                step_lr.step()
                 loop.set_postfix(loss=loss.item(), lr=step_lr.get_last_lr()[0])
             continue
+        
+        step = 0
         for idx, x, y in loop:
+            step = step + 1
             adam.zero_grad()
+            
+            
             x = torch.stack(x, dim=1).to(device)
+            y = y.to(device)
+            
+
             noise, clean = model(x)
 
-
-
-            # loss.backward()
+            loss = ce(noise, y)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             adam.step()
-            step_lr.step(epoch)
+            step_lr.step()
+            #loop.set_postfix(loss=loss.item(), lr=step_lr.get_last_lr()[0])
+            
+            y_pred = torch.argmax(clean, axis=1)
+            indices_true = torch.arange(0, len(y)).to(device)
+            indices_true = indices_true[y_pred == y]
+            
+            y_nois = torch.argmax(noise, axis=1)
+            indices_noise = torch.arange(0, len(y)).to(device)
+            indices_noise = indices_noise[y_nois == y]
+            
+            acc_num = len(indices_noise)
+
+            if(len(indices_true) == 0):
+                continue
+
+            x_new = x[indices_true]
+            y_new = y[indices_true]
+            
+            #  !!!!!!!!!!!!
+            adam.zero_grad()
+            #  !!!!!!!!!!!!            
+            pred_new = model.pre_run(x_new)
+            loss_new = ce(pred_new, y_new)
+            loss_new.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+
+            adam.step()
+            step_lr.step()
+            
+            
+
+            total_loss.append(loss.detach().cpu())
+            total_acc_num.append(acc_num)
+            total_num.append(y.shape[0])
+            
+            verbose = args.display_step
+
+            if step % verbose == 0:
+                print('[INFO] Len {}, Epoch {} - Batch {} : loss = {}, acc = {}'.format(
+                    len(indices_true), epoch, step, np.mean(total_loss[-verbose:]),
+                    sum(total_acc_num[-verbose:]) * 1.0 / sum(total_num[-verbose:])))
+            
             loop.set_postfix(loss=loss.item(), lr=step_lr.get_last_lr()[0])
+
+        loss = np.mean(total_loss)
+        acc = sum(total_acc_num) * 1.0 / sum(total_num)
+        print('\n[INFO] Epoch {} : mean loss = {}, mean acc = {}'.format(epoch, loss, acc))
+        if np.isnan(loss):
+            raise ValueError('[Error] loss is not a number!')
+        
+        print("=" * 50 + "val" + "=" * 50)
+        val_acc = test(model, val_loader)
+
+        print("=" * 50 + "test" + "=" * 50)
+        test(model, test_loader)
+        
+        '''
+        if best_val_acc < val_acc:
+            best_val_acc = val_acc
+            best_val_epoch = epoch
+            # best_test_acc = test_acc
+            if not os.path.exists(classifier.config.ckpt_path + classifier.config.model + '/'):
+                os.makedirs(classifier.config.ckpt_path + classifier.config.model + '/')
+            saver.save(sess, save_path=save_path)
+        if epoch_i - best_val_epoch > classifier.config.early_stopping:
+            # here early_stopping is 5 :> 'the number of early stopping epoch'
+            print('Normal early stop at {}!'.format(best_val_epoch))
+            # break
+        '''
