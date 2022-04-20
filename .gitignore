@@ -2,3 +2,5 @@ data/word_embeddings.npy
 data/word_idx.dict
 .idea/
 /ckpt/movie.params
+/ckpt/restaurant.params
+/ckpt/laptop.params

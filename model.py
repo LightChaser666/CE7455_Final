@@ -87,6 +87,179 @@ class ConvModule(nn.Module):
     def forward(self, x):        
         return torch.cat( (self.cnn1(x), self.cnn2(x), self.cnn3(x)) , dim=1).squeeze()
 
+class NetTransAB(nn.Module):
+    def __init__(self, domain='movie', max_seq_len=40, dropout1=0.5, dropout2=1.0):
+        super(NetTransAB, self).__init__()
+        # Use GloVe as default embeddings
+        print('Load GloVe Embedding for ' + domain + ' data...')
+        assert domain in ['laptop', 'movie', 'restaurant']
+        GloVe = np.load('./data/Embeddings/' + domain + '.npy')
+        self.embedding = nn.Embedding(GloVe.shape[0], GloVe.shape[1])
+        self.embedding.weight.data.copy_(torch.from_numpy(GloVe))
+        # Build model
+        self.filter_num = 100
+        self.max_seq_len = max_seq_len
+        self.word_dim = self.embedding.weight.shape[1]
+        self.dropout1 = nn.Dropout(dropout1)
+        self.cnn = ConvModule(self.word_dim, self.max_seq_len, self.filter_num)
+        self.noise_transformer = TransformerModule(self.word_dim, self.max_seq_len, self.filter_num)
+        self.dropout2 = nn.Dropout(dropout2)
+        d_hid = self.filter_num * 3
+        self.clean_linear = nn.Linear(d_hid, 2)
+        # Initialize with magic number
+        nn.init.uniform_(self.clean_linear.weight,-0.01,0.01)
+        nn.init.uniform_(self.clean_linear.bias,-0.01,0.01)
+        self.transition1 = TransitionLayer(d_hid)
+        self.transition2 = TransitionLayer(d_hid)
+
+    def forward(self, x):
+        mask = x==0
+        x = self.embedding(x)
+        x = self.dropout1(x)
+        x_trans = x.transpose(1,0)
+        x = x.unsqueeze(1)
+        
+        output1 = self.cnn(x)
+        output2 = self.noise_transformer(x_trans, mask)
+        clean_logits = self.clean_linear(output1)
+        p = (self.transition1(output2).unsqueeze(2),
+            self.transition2(output2).unsqueeze(2))
+        prob = torch.cat(p, 2)
+        sen_logits = clean_logits.unsqueeze(1)
+        noisy_logits = sen_logits.matmul(prob).squeeze(1)
+        return noisy_logits, clean_logits
+
+    def pre_run(self, x):
+        mask = x==0
+        x = self.embedding(x)
+        x = self.dropout1(x)
+        x = x.unsqueeze(1)
+        output1 = self.cnn(x)
+        return self.clean_linear(output1)
+
+    def get_pre_l2(self):
+        return torch.norm(self.clean_linear.weight) + torch.norm(self.clean_linear.bias)
+
+    def get_l2(self):
+        return self.get_pre_l2() + self.transition1.get_l2() + self.transition2.get_l2()
+
+class NetTransBA(nn.Module):
+    def __init__(self, domain='movie', max_seq_len=40, dropout1=0.5, dropout2=1.0):
+        super(NetTransBA, self).__init__()
+        # Use GloVe as default embeddings
+        print('Load GloVe Embedding for ' + domain + ' data...')
+        assert domain in ['laptop', 'movie', 'restaurant']
+        GloVe = np.load('./data/Embeddings/' + domain + '.npy')
+        self.embedding = nn.Embedding(GloVe.shape[0], GloVe.shape[1])
+        self.embedding.weight.data.copy_(torch.from_numpy(GloVe))
+        # Build model
+        self.filter_num = 100
+        self.max_seq_len = max_seq_len
+        self.word_dim = self.embedding.weight.shape[1]
+        self.dropout1 = nn.Dropout(dropout1)
+        self.transformer = TransformerModule(self.word_dim, self.max_seq_len, self.filter_num)
+        self.noise_cnn = ConvModule(self.word_dim, self.max_seq_len, self.filter_num)
+        self.dropout2 = nn.Dropout(dropout2)
+        d_hid = self.filter_num * 3
+        self.clean_linear = nn.Linear(d_hid, 2)
+        # Initialize with magic number
+        nn.init.uniform_(self.clean_linear.weight,-0.01,0.01)
+        nn.init.uniform_(self.clean_linear.bias,-0.01,0.01)
+        self.transition1 = TransitionLayer(d_hid)
+        self.transition2 = TransitionLayer(d_hid)
+
+    def forward(self, x):
+        mask = x==0
+        x = self.embedding(x)
+        x = self.dropout1(x)
+        x_noise = x.unsqueeze(1)
+        x = x.transpose(1,0)
+        output1 = self.transformer(x, mask)
+        output2 = self.noise_cnn(x_noise)
+        clean_logits = self.clean_linear(output1)
+        p = (self.transition1(output2).unsqueeze(2),
+            self.transition2(output2).unsqueeze(2))
+        prob = torch.cat(p, 2)
+        sen_logits = clean_logits.unsqueeze(1)
+        noisy_logits = sen_logits.matmul(prob).squeeze(1)
+        return noisy_logits, clean_logits
+
+    def pre_run(self, x):
+        mask = x==0
+        x = self.embedding(x)
+        x = self.dropout1(x).transpose(1,0)
+        output1 = self.transformer(x, mask)
+        return self.clean_linear(output1)
+
+    def get_pre_l2(self):
+        return torch.norm(self.clean_linear.weight) + torch.norm(self.clean_linear.bias)
+
+    def get_l2(self):
+        return self.get_pre_l2() + self.transition1.get_l2() + self.transition2.get_l2()
+
+class NetTrans(nn.Module):
+    def __init__(self, domain='movie', max_seq_len=40, dropout1=0.5, dropout2=1.0):
+        super(NetTrans, self).__init__()
+        # Use GloVe as default embeddings
+        print('Load GloVe Embedding for ' + domain + ' data...')
+        assert domain in ['laptop', 'movie', 'restaurant']
+        GloVe = np.load('./data/Embeddings/' + domain + '.npy')
+        self.embedding = nn.Embedding(GloVe.shape[0], GloVe.shape[1])
+        self.embedding.weight.data.copy_(torch.from_numpy(GloVe))
+        # Build model
+        self.filter_num = 100
+        self.max_seq_len = max_seq_len
+        self.word_dim = self.embedding.weight.shape[1]
+        self.dropout1 = nn.Dropout(dropout1)
+        self.transformer = TransformerModule(self.word_dim, self.max_seq_len, self.filter_num)
+        self.noise_transformer = TransformerModule(self.word_dim, self.max_seq_len, self.filter_num)
+        self.dropout2 = nn.Dropout(dropout2)
+        d_hid = self.filter_num * 3
+        self.clean_linear = nn.Linear(d_hid, 2)
+        # Initialize with magic number
+        nn.init.uniform_(self.clean_linear.weight,-0.01,0.01)
+        nn.init.uniform_(self.clean_linear.bias,-0.01,0.01)
+        self.transition1 = TransitionLayer(d_hid)
+        self.transition2 = TransitionLayer(d_hid)
+
+    def forward(self, x):
+        mask = x==0
+        x = self.embedding(x)
+        x = self.dropout1(x).transpose(1,0)
+        output1 = self.transformer(x, mask)
+        output2 = self.noise_transformer(x, mask)
+        clean_logits = self.clean_linear(output1)
+        p = (self.transition1(output2).unsqueeze(2),
+            self.transition2(output2).unsqueeze(2))
+        prob = torch.cat(p, 2)
+        sen_logits = clean_logits.unsqueeze(1)
+        noisy_logits = sen_logits.matmul(prob).squeeze(1)
+        return noisy_logits, clean_logits
+
+    def pre_run(self, x):
+        mask = x==0
+        x = self.embedding(x)
+        x = self.dropout1(x).transpose(1,0)
+        output1 = self.transformer(x, mask)
+        return self.clean_linear(output1)
+
+    def get_pre_l2(self):
+        return torch.norm(self.clean_linear.weight) + torch.norm(self.clean_linear.bias)
+
+    def get_l2(self):
+        return self.get_pre_l2() + self.transition1.get_l2() + self.transition2.get_l2()
+
+
+class TransformerModule(nn.Module):
+    def __init__(self, word_dim, max_seq_len, filter_num=100):
+        super(TransformerModule, self).__init__()
+        layer = nn.TransformerEncoderLayer(word_dim,3,300)
+        self.encoder = nn.TransformerEncoder(layer,3)
+
+    def forward(self, x, mask):
+        return torch.mean(self.encoder(x,src_key_padding_mask=mask),dim=0)
+
+
 
 class TransitionLayer(nn.Module):
     def __init__(self, hidden_dim):
