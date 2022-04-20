@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument('--t1', type=str, default='last', help='type of hidden output')
     parser.add_argument('--t2', type=str, default='last', help='type of hidden output')
     parser.add_argument('--embedding_type', type=str, default='dynamic', help='embedding type: static or dynamic')
-    #parser.add_argument('--model', type=str, default='NetAb', help='models: NetAb')
+    parser.add_argument('--model', type=int, default=3, help='models: NetAB - 0, NetTrans - 1, NetTransAB - 2, NetTransBA - 3')
     parser.add_argument('--decay_rate', type=float, default=0.96, help='decay rate of learning rate')
     parser.add_argument('--early_stopping', type=int, default=5, help='the number of early stopping epoch')
     parser.add_argument('--decay_steps', type=int, default=2000, help='decay rate of learning rate')
@@ -101,12 +101,17 @@ if __name__ == '__main__':
     args = parse_args()
     domain = args.dataset
     epochs = args.n_epoch
-    torch.cuda.set_device(4)
+    torch.cuda.set_device(0)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = NetAB(domain).to(device)
-    #model = NetTrans(domain).to(device)
-    #model = NetTransAB(domain).to(device)
-    #model = NetTransBA(domain).to(device)
+    assert args.model in [0, 1, 2, 3]
+    if args.model == 0:
+        model = NetAB(domain).to(device)
+    elif args.model == 1:
+        model = NetTrans(domain).to(device)
+    elif args.model == 2:
+        model = NetTransAB(domain).to(device)
+    elif args.model == 3:
+        model = NetTransBA(domain).to(device)
     # Dataset Preparation
     train_set = DomainData(domain, 'train')
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
